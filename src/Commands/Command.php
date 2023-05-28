@@ -38,8 +38,8 @@ abstract class Command implements CommandInterface
     /** @var string Command Argument Pattern */
     protected string $pattern = '';
 
-    /** @var array|null Details of the current entity this command is responding to - offset, length, type etc */
-    protected ?array $entity;
+    /** @var array Details of the current entity this command is responding to - offset, length, type etc */
+    protected array $entity = [];
 
     /**
      * Get the Command Name.
@@ -161,47 +161,52 @@ abstract class Command implements CommandInterface
      */
     protected function parseCommandArguments(): array
     {
+        if ($this->pattern === '') {
+            return [];
+        }
+
         // Generate the regex needed to search for this pattern
-        $regex = $this->makeRegexPattern();
+        [$pattern, $arguments] = $this->makeRegexPattern();
 
-        preg_match("%{$regex[0]}%sixu", $this->relevantMessageSubString(), $matches);
+        preg_match("%{$pattern}%ixmu", $this->relevantMessageSubString(), $matches, PREG_UNMATCHED_AS_NULL);
 
-        return $this->formatMatches($matches, $regex[1]);
+        return $this->formatMatches($matches, $arguments);
     }
 
     private function makeRegexPattern(): array
     {
-        $pattern = '#\{(?<argument>\D\w+?)}|\{\s*(?<regex>\S+)\s*:\s*(?<pattern>.+)\s*}#';
-        preg_match_all(pattern: $pattern, subject: $this->pattern, matches: $matches, flags: PREG_SET_ORDER);
+        preg_match_all(
+            pattern: '#\{\s*(?<name>\w+)\s*(?::\s*(?<pattern>\S+)\s*)?}#ixmu',
+            subject: $this->pattern,
+            matches: $matches,
+            flags: PREG_SET_ORDER
+        );
 
         $patterns = collect($matches)
-            ->mapWithKeys(function ($match) {
-                $name = $match['regex'] ?? $match['argument'] ?? null;
-
-                if ($name === null) {
-                    return [];
-                }
-
+            ->mapWithKeys(function ($match): array {
                 $pattern = $match['pattern'] ?? '[^ ]++';
 
-                return [$name => "(?<$name>$pattern)?"];
+                return [
+                    $match['name'] => "(?<{$match['name']}>{$pattern})?",
+                ];
             })
             ->filter();
 
         $commandName = ($this->aliases === []) ? $this->name : implode('|', [$this->name, ...$this->aliases]);
 
-        $pattern = sprintf('(?:\/)%s%s%s', "(?:{$commandName})", self::OPTIONAL_BOT_NAME, $patterns->implode('\s*'));
-
-        return [$pattern, $patterns->keys()->toArray()];
+        return [
+            sprintf('(?:\/)%s%s%s', "(?:{$commandName})", self::OPTIONAL_BOT_NAME, $patterns->implode('\s*')),
+            $patterns->keys()->all(),
+        ];
     }
 
-    private function relevantMessageSubString(): bool|string
+    private function relevantMessageSubString(): string
     {
         //Get all the bot_command offsets in the Update object
         $commandOffsets = $this->allCommandOffsets();
 
         if ($commandOffsets->isEmpty()) {
-            return $this->getUpdate()->getMessage()->text;
+            return $this->getUpdate()->getMessage()->text ?? '';
         }
 
         //Extract the current offset for this command and, if it exists, the offset of the NEXT bot_command entity
@@ -215,21 +220,15 @@ abstract class Command implements CommandInterface
 
     private function allCommandOffsets(): Collection
     {
-        $message = $this->getUpdate()
-            ->getMessage();
-
-        return $message->hasCommand() ?
-            $message
-                ->get('entities', collect())
-                ->filter(static fn (MessageEntity $entity): bool => $entity->type === 'bot_command')
-                ->pluck('offset') :
-            collect();
+        return $this->getUpdate()->getMessage()?->get('entities', collect())
+            ->filter(static fn (MessageEntity $entity): bool => $entity->type === 'bot_command')
+            ->pluck('offset') ?? collect();
     }
 
     private function cutTextBetween(Collection $splice): string
     {
-        return substr(
-            $this->getUpdate()->getMessage()->text,
+        return mb_substr(
+            $this->getUpdate()->getMessage()->text ?? '',
             $splice->first(),
             $splice->last() - $splice->first()
         );
@@ -237,24 +236,17 @@ abstract class Command implements CommandInterface
 
     private function cutTextFrom(Collection $splice): string
     {
-        return substr(
-            $this->getUpdate()->getMessage()->text,
+        return mb_substr(
+            $this->getUpdate()->getMessage()->text ?? '',
             $splice->first()
         );
     }
 
-    private function formatMatches(array $matches, array $argKeys): array
+    private function formatMatches(array $matches, array $arguments): array
     {
-        $formattedMatches = collect($matches)
-            ->filter(static fn ($match, $key): bool => is_string($key))
-            ->map(static fn ($match): string => trim($match))
-            ->filter()
-            ->all();
+        $matches = array_filter($matches, 'is_string', ARRAY_FILTER_USE_KEY);
 
-        return array_merge(
-            array_fill_keys($argKeys, null),
-            $formattedMatches
-        );
+        return array_merge(array_fill_keys($arguments, null), $matches);
     }
 
     /**

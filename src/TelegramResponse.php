@@ -39,7 +39,7 @@ final class TelegramResponse
      * @param  ResponseInterface|PromiseInterface  $response
      */
     public function __construct(/** @var TelegramRequest The original request that returned this response. */
-    private TelegramRequest $request, $response)
+        private TelegramRequest $request, $response)
     {
         if ($response instanceof ResponseInterface) {
             $this->httpStatusCode = $response->getStatusCode();
@@ -62,7 +62,7 @@ final class TelegramResponse
      */
     public function decodeBody(): void
     {
-        if ($this->body) {
+        if ($this->body !== '' && $this->body !== '0') {
             $this->decodedBody = json_decode($this->body, true, 512, JSON_THROW_ON_ERROR);
         }
 
